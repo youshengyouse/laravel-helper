@@ -1,0 +1,29 @@
+{
+    "name": "yousheng/laravel-helper",
+    "version": "1.0.0",
+    "minimum-stability": "dev",
+    "description": "A Laravel helper component",
+      "authors": [
+        {
+            "name": "daqi",
+            "email": "2922800186@qq.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Yousheng\\LaravelHelper\\": "src/"
+        }
+    },
+     "require": {},
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Yousheng\\LaravelHelper\\HelperServiceProvider"
+            ],
+            "aliases": {
+                "Help": "Yousheng\\LaravelHelper\\Facades\\Help"
+            }
+        }
+    },
+    "license": "MIT"
+}

@@ -7,7 +7,7 @@ class Help extends Facade{
     public static function getFacadeAccessor(){
         return 'helper';
     }
-    public static function routes(){
+    public static function statistic(){
         // list all sessions
         Route::prefix('yousheng')->group(function (){
 
@@ -64,6 +64,10 @@ class Help extends Facade{
      */
 
     public static function prettyArray($arr,$title=null,$sort=false){
+       echo Array2str($arr,$title,$sort);
+    }
+
+    public static function Array2str($arr,$title=null,$sort=false){
         if(!is_array($arr)) return;
         $isOneDimensional=count($arr) == count($arr, 1);
         if ($isOneDimensional){
@@ -80,6 +84,7 @@ class Help extends Facade{
                 $str='It\'s only a empty array';
             }
         }
+        ob_start();
         echo "<pre>";
         echo $title?"<h2>".$title."</h2>":'';
         if($isOneDimensional){
@@ -88,5 +93,6 @@ class Help extends Facade{
             print_r($arr);
         }
         echo "</pre>";
+        return ob_get_clean();
     }
 }

@@ -9,21 +9,14 @@ class HelperServiceProvider extends ServiceProvider{
         $this->app->singleton('helper',function () {
             return new Helper($this->app);
         });
+        $this->app->make(\Illuminate\Contracts\Http\Kernel::class)->prependMiddleware(\Yousheng\LaravelHelper\Http\Middleware\statistic::class);
 
 
     }
     public function boot(){
+        Help::statistic();
+        $this->commands([]);
 
-
-        Help::routes();
-
-
-        /*
-
-        $routes = collect($router->getRoutes()->getRoutes())->mapWithKeys(function($item){
-            return [$item->uri=>$item->getActionName()];
-        })->all();
-        */
 
     }
 

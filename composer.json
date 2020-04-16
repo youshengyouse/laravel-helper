@@ -12,7 +12,10 @@
     "autoload": {
         "psr-4": {
             "Yousheng\\LaravelHelper\\": "src/"
-        }
+        },
+        "files": [
+            "src/debug.php"
+        ]
     },
      "require": {},
     "extra": {

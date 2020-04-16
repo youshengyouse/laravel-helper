@@ -8,8 +8,4 @@ class Helper
     {
         $this->container  = $container;
     }
-    public function wang(){
-
-    }
-
 }

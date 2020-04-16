@@ -18,3 +18,11 @@ composer require yousheng/laravel-helper
 - list-aliases
 - list-publishes
 - list-sessions
+
+### 调试部分
+http://nova2.demo.bendi/nova/dashboards/main?debug=xxx
+-  routes
+-  views
+- aliases
+- sessions
+- publishes

@@ -11,7 +11,8 @@
     ],
     "autoload": {
         "psr-4": {
-            "Yousheng\\LaravelHelper\\": "src/"
+            "Yousheng\\LaravelHelper\\": "src/",
+            "Yousheng\\LaravelHelper\\Console\\Tests\\": "tests/"
         },
         "files": [
             "src/debug.php"

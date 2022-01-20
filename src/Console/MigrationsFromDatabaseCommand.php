@@ -9,14 +9,16 @@ use PDO;
 
 class MigrationsFromDatabaseCommand extends Command
 {
+    use TableHelpers;
 
     /**
      * The console command name.
      * example: php artisan convert:migrations --ignore="table1, table2"
+     * example: php artisan migrate:database yousheng_0he1_com --only="option,sells"
      *
      * @var string
      */
-    protected $signature = 'migrate:database {database} {--ignore=}';
+    protected $signature = 'db:migrate {database} {--ignore=}  {--only=}';
 
     /**
      * The console command description.
@@ -26,28 +28,34 @@ class MigrationsFromDatabaseCommand extends Command
     protected $description = 'create migrations files from an existing MySQL database';
 
     protected static $ignoreTabels = ['migrations'];
-    protected static $selects = array('column_name as Field', 'column_type as Type', 'is_nullable as Null', 'column_key as Key', 'column_default as Default', 'extra as Extra', 'data_type as Data_Type');
+
+    protected static $selects = array('column_name as Field', 'column_type as Type', 'is_nullable as Null', 'column_key as Key', 'column_default as Default', 'extra as Extra', 'data_type as Data_Type','column_comment as Column_Comment');//增加说明部分
     protected static $schema = [];
     protected static $type2method = [
         'PRI' => 'increments',
         "int:length" => "interger",
     ];
     protected static $sortedTables = [];
-    protected static $templateGetTables = "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_TYPE='BASE TABLE' AND TABLE_SCHEMA='%s'";
+
+    // todo 增加表说明部分
+    protected static $templateGetTableComment = "SELECT TABLE_COMMENT FROM information_schema.TABLES WHERE TABLE_NAME='%s' AND TABLE_SCHEMA='%s'";
+
+
+
     protected static $templateGetForeignTables = "SELECT TABLE_NAME,REFERENCED_TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA='%s' AND REFERENCED_TABLE_SCHEMA='%s'";
     protected static $templateGetForeignConstraint = <<<EOT
-SELECT 
-	a_.CONSTRAINT_NAME, 
-	a_.TABLE_NAME, 
+SELECT
+	a_.CONSTRAINT_NAME,
+	a_.TABLE_NAME,
 	a_.COLUMN_NAME,
-	a_.REFERENCED_TABLE_NAME, 
-	a_.REFERENCED_COLUMN_NAME, 
-	b_.UPDATE_RULE, 
+	a_.REFERENCED_TABLE_NAME,
+	a_.REFERENCED_COLUMN_NAME,
+	b_.UPDATE_RULE,
 	b_.DELETE_RULE
-FROM 
+FROM
 	information_schema.`KEY_COLUMN_USAGE` AS a_
-INNER JOIN 
-	information_schema.REFERENTIAL_CONSTRAINTS AS b_ 
+INNER JOIN
+	information_schema.REFERENTIAL_CONSTRAINTS AS b_
 ON a_.CONSTRAINT_NAME = b_.CONSTRAINT_NAME AND a_.CONSTRAINT_SCHEMA=b_.CONSTRAINT_SCHEMA AND a_.TABLE_NAME = b_.TABLE_NAME
 WHERE a_.CONSTRAINT_SCHEMA='%s' AND a_.TABLE_NAME = '%s' ;
 EOT;
@@ -115,27 +123,69 @@ EOT;
         // 数据库名和排除的表
         $databaseName = $this->argument('database');
         $optionIgnore = $this->option('ignore');
+        $optionOnly = $this->option('only');  // 只提取某些表
 
         // 提取哪些表需要生成迁移文件
-        $tables = collect(DB::select(sprintf(static::$templateGetTables, $databaseName)))->pluck('TABLE_NAME')->all();
+        $migrateTables = collect(DB::select(sprintf(static::$templateGetTables, $databaseName)))->pluck('TABLE_NAME')->all();   // 所有表
 
-        $ignoreTables = array_merge(static::$ignoreTabels, explode(',', str_replace(' ', '', $optionIgnore)));
-        $migrateTables = array_diff($tables, $ignoreTables);
-        if ($countMigrate = count($migrateTables)) {
-            $this->info(count($migrateTables) . ' tables will be writed into migration file,include ' . $migrateTables[0] . ' ... ' . $migrateTables[count($migrateTables) - 1] . ' etc.');
+        if($optionOnly){
+        	$onlyTables =  explode(',', str_replace(' ', '', $optionOnly));       //  only优先级高于ignore
+            $onlyFilteredTables = collect($onlyTables)->filter(function($tableName){
+                if(!\Illuminate\Support\Facades\Schema::hasTable($tableName)){    // 如果指定的表不存在，报错
+                    $this->warn("table `$tableName` you selected doesn`t exists");
+                }
+                return \Illuminate\Support\Facades\Schema::hasTable($tableName);
+            })->all();
+            if(count($onlyFilteredTables)===0){
+                $this->comment('No table migrated');
+                return;
+            }
+            $migrateTables=$onlyFilteredTables;   // 只迁移指定的且存在的表
+        	$optionIgnore = null;
         }
-        // 外键表
-        $tableForeigns = collect(DB::select(sprintf(static::$templateGetForeignTables, $databaseName, $databaseName)))->mapWithKeys(function ($item) {
-            return [$item->TABLE_NAME => $item->REFERENCED_TABLE_NAME];
+
+        if($optionIgnore){
+        	$ignoreTables = array_merge(static::$ignoreTabels, explode(',', str_replace(' ', '', $optionIgnore)));           // 忽略的表
+        	$migrateTables = array_diff($migrateTables, $ignoreTables);
+        }
+
+
+        // 排除migrations表
+        $migrateTables = collect($migrateTables)->reject(function($table){
+            return $table==='migrations';
         })->all();
+        
+        // 迁移表数量统计
+        if ($countMigrate = count($migrateTables)) {
+            $this->info("\n".count($migrateTables) . ' tables will be writed into migration file,include:');
+            if($countMigrate>0){
+	            foreach ($migrateTables as  $value) {
+	            	$this->info("\t TABLE: '$value'");
+	            }
+            }
+        }
+        // 所有外键表
+        $tableForeigns = collect(DB::select(sprintf(static::$templateGetForeignTables, $databaseName, $databaseName)))->mapWithKeys(function ($item)  {
+			return [$item->TABLE_NAME => $item->REFERENCED_TABLE_NAME];
+		// 2020-11-14 只需要当前迁移表的主表
+        })->filter(function($item,$index) use($migrateTables){
+			return in_array($index,$migrateTables);
+        })->all();
+
+        if ($countForeign = count($tableForeigns)>0) {
+            $this->info($countForeign . ' FOREIGN TABLES  will be writed into migration file，include:');
+            foreach ($tableForeigns as $table=>$foreign) {
+            	$this->info("\t FOREIGN TABLE: ".$foreign."[ for '".$table."'']");
+            }
+        }
 
         // 所有表排序
         $migrateTables = $this->sortTable($migrateTables, $tableForeigns);
 
-        if ($countForeign = count($tableForeigns)) {
-            $this->info($countForeign . ' FOREIGN TABLES  will be writed into migration file');
+        if(count($migrateTables)===0){
+            $this->comment('No table migrated');
+            return;
         }
-
 
         foreach ($migrateTables as $table) {
             $downStack[] = $table;
@@ -146,16 +196,30 @@ EOT;
                 return (array)$value;
             }, $tableDescribes);
 
+
+            // todo 增加表说明部分
+            $tableComment = DB::table('information_schema.TABLES')->where('table_schema', $databaseName)->where('table_name', $table)->select('TABLE_COMMENT')->first();
             foreach ($tableDescribes as $values) {
                 extract($values);
                 // $Field $Type $Null $Key $Extra $Data_Type
                 $method = "";
-                $type = Str::before($Type, '('); // int(10)
+                $type = Str::before($Type, '('); // int(10),  smallint(5) unsigned
                 $numbers = "";
                 $nullable = $Null == "NO" ? "" : "->nullable()";
-                $default = empty($Default) ? "" : "->default(\"{$Default}\")";
+                // 2021-10-30 处理，默认时间值为CURRENT_TIMESTAMP的情况，将它改为
+                if($Default==='CURRENT_TIMESTAMP'){
+                    $default = "->useCurrent()";
+                }elseif(is_null($Default)){
+                    $default="";
+                }elseif($type==='int' && (string)$Default==='0'){
+                    $default = "->default({$Default})";
+                }else{
+                    $default = "->default(\"{$Default}\")";
+                }
                 $unsigned = strpos($Type, "unsigned") === false ? '' : '->unsigned()';
                 $unique = $Key == 'UNI' ? "->unique()" : "";
+                $comment = empty($Column_Comment) ? "" : "->comment(\"{$Column_Comment}\")";
+
                 $choices = '';
                 switch ($type) {
                     case 'enum':
@@ -169,8 +233,18 @@ EOT;
                     case 'bigint' :
                         $method = 'bigInteger';
                         break;
-                    case 'samllint' :
+                    case 'mediumint' :
+                        $method = 'mediumInteger';
+                        break;
+                    case 'smallint' :
                         $method = 'smallInteger';
+                        break;
+                    case 'tinyint' :
+                        if ($Type == 'tinyint(1)') {
+                            $method = 'boolean';
+                        } else {
+                            $method = 'tinyInteger';
+                        }
                         break;
                     case 'char' :
                     case 'varchar' :
@@ -184,13 +258,12 @@ EOT;
                         $numbers = ", " . substr($Type, strpos($Type, '(') + 1, -1);
                         $method = 'decimal';
                         break;
-                    case 'tinyint' :
-                        if ($Type == 'tinyint(1)') {
-                            $method = 'boolean';
-                        } else {
-                            $method = 'tinyInteger';
-                        }
-                        break;
+                        // 2021-10-29加
+                    case 'double' :
+                        $numbers = ", " . substr($Type, strpos($Type, '(') + 1, -1);
+                        $method = 'double';
+                        break;    
+
                     case 'date':
                         $method = 'date';
                         break;
@@ -206,12 +279,14 @@ EOT;
                     case 'text' :
                         $method = 'text';
                         break;
+                    case 'longtext' :
+                        $method = 'longText';
+                        break;
                 }
                 if ($Key == 'PRI') {
                     $method = 'increments';
                 }
-                $up .= "            $" . "table->{$method}('{$Field}'{$choices}{$numbers}){$nullable}{$default}{$unsigned}{$unique};\n";
-
+                $up .= "            $" . "table->{$method}('{$Field}'{$choices}{$numbers}){$nullable}{$default}{$unsigned}{$unique}{$comment};\n";
             }
 
             // 如果当前表有外键，获取相应外键信息
@@ -232,6 +307,11 @@ EOT;
 
             $up .= "        });\n\n";
 
+            // table comment
+            if($tComent = $tableComment->TABLE_COMMENT){
+                $up .= "        DB::statement(\"ALTER TABLE `{$table}` comment = '{$tComent}'\");\n";
+            }
+
             self::$schema[$table] = array(
                 'up' => $up,
                 'down' => $down
@@ -242,9 +322,11 @@ EOT;
 
         $schema = static::compileSchema($databaseName);
         $filename = date('Y_m_d_His') . "_create_" . str_replace(['_', '.'], '', Str::snake($databaseName)) . "_database.php";
-        $path = app()->databasePath() . '/migrations/';
+        //$path = app()->databasePath() . '/migrations/';
+        app('files')->ensureDirectoryExists($path = app()->databasePath() . '/migrations/');
         file_put_contents($path . $filename, $schema);
         $this->comment('Migration Created Successfully');
+        $this->info("\tMigration file is  ".$path . $filename);
     }
 
 
@@ -254,8 +336,9 @@ EOT;
         $upSchema = "";
         $downSchema = "";
         $newSchema = "";
+        $tab=$number===1?"":"        ";
         foreach (self::$schema as $name => $values) {
-            $upSchema .= "        // --------------------------------{$number}------------------{$name}\n{$values['up']}";
+            $upSchema .=  $tab."// --------------------------------{$number}------------------{$name}\n{$values['up']}";
             if ($values['down'] !== "") {
                 $downSchema .= "\n{$values['down']}";
             }

@@ -59,7 +59,7 @@ EOT;
     }
 
 
-    public function print2file($item, $append = false, $file = "index.html", $maxLevel = null)
+    public function print2file($item, $append = false, $dirname="0000",$file = "index.html", $maxLevel = null)
     {
         ini_set('memory_limit', static::$maxMemory??'200M');
         if ($maxLevel) {
@@ -71,7 +71,13 @@ EOT;
         $debugFile = $debugArray[0]['file'];
         $debugLine = $debugArray[0]['line'];
 
-        $saveDir = $_SERVER['DOCUMENT_ROOT'] . "/0000";
+        $saveDir = $_SERVER['DOCUMENT_ROOT'] . "/{$dirname}";
+
+        if(substr(PHP_SAPI_NAME(),0,3) === 'cli'){
+            $saveDir = getcwd(). "/public/{$dirname}";
+        }
+
+
         $this->files->ensureDirectoryExists($saveDir);
         $saveFile = $saveDir . DIRECTORY_SEPARATOR . $file;
 
@@ -89,10 +95,12 @@ EOT;
         ob_clean();
         $content=$this->cleanPrint_rString($content);
         $content= mb_substr($content,0,static::$maxStrLength);
-        $content = "File:" . $debugFile . '__Line:' . $debugLine . "\n".$content;
+        $content = "\n\r...File:" . $debugFile . '__Line:' . $debugLine . "\n\r".$content. "\n\r";
 
         // todo html template to pretty show
         //$content = sprintf(static::$tmpl, $content);
+
+       // echo "\n .... p2f函数 正在向 $saveFile  写调试内容 ...  \n";
         if ($append) {
             $this->files->append($saveFile, $content);
         } else {
@@ -220,6 +228,7 @@ EOT;
      *  获取对象的所有public方法，适合代码分析用
      *  example1：   print_r( \Help::getAllPublicMethods(\Illuminate\Support\Collection::class) ) ;
      *  example2：   print_r( \Help::getAllPublicMethods(app('files')  );
+     *  example2     http://database.study/?getpublic=\Illuminate\Http\Request
      *  原来没有包含trait中的部分，2020-4-24补充 use trait部分
      * @param $class
      * @return mixed
@@ -228,59 +237,99 @@ EOT;
 
     public function getAllPublicMethods($class)
     {
+        # 1.类继承链：求出当前类及所有父类组成的数组[当前类，父类，爷类...]
+        $chains = static::getChain()($class);
 
-        $reflectionClass = new \ReflectionClass($class);
-        $traits = $reflectionClass->getTraits();
-        /**
-         * Array(
-                [Illuminate\Auth\GuardHelpers] => ReflectionClass Object(
-                        [name] => Illuminate\Auth\GuardHelpers
-                    )
-                [Illuminate\Support\Traits\Macroable] => ReflectionClass Object(
-                        [name] => Illuminate\Support\Traits\Macroable
-                    )
-            )
-         */
-        // 将traits和当前类组成一个数组
-        $traits = collect($traits)->map(function($item){
-            return $item->getName();
-        })->values()->all();
-        $classes = array_merge($traits,[$class]);
-        $array = [];
-        foreach ($classes as $class) {
-            $isTrait = in_array($class,$traits);
-            $content = $this->files->get($this->getClassFileName($class));
-            $pattern1 = '/^((?!public).)*$/m';                  // 删除不包含 `public`的行
-            $pattern2 = '/^\s+/m';                              // 去行首空格及空行
-            $pattern3 = '/public\s+(static\s)?\s*function\s+/'; // 去掉public function
-            $content = preg_replace($pattern1, '', $content);
+        # 2.类和trait组成的数组，考虑到每个类可能有多个trait
+        $all=collect($chains)->map(function($chain){
+            $reflectionClass = new \ReflectionClass($chain);
+            $traits = collect($reflectionClass->getTraits())->map(function($item){
+                return $item->getName();
+            })->values()->all();
+            return array_merge($traits,[$chain]);
+        })->collapse()->all();
+
+        $tmp=[];
+
+        foreach ($all as $class) {
+            $content = $this->files->get($this->getClassFileName($class)); //读取类文件的内容
+            $pattern1 = '/\s*,\s*\n/m';                                    // 参数多行并一行
+            $pattern2 = '/^((?!public).)*$/m';                             // 删除不包含 `public`的行
+            $pattern3 = '/^\s+/m';                                         // 去行首空格及空行
+            $pattern4 = '/public\s+(static\s)?\s*function\s+/';            // 去掉public function
+            $pattern5 = '/ {2,}/';                                         // 多个空格合成一个空格
+
+            $content = preg_replace($pattern1, ',', $content);
             $content = preg_replace($pattern2, '', $content);
-            $content = preg_replace($pattern3, '$1', $content);
+            $content = preg_replace($pattern3, '', $content);
+            $content = preg_replace($pattern4, '$1', $content);
+            $content = preg_replace($pattern5, ' ', $content);
             $lines = explode("\n", $content);
-            // method in Trait
-            if($isTrait){
-                $lines= collect($lines)->map(function ($value) use($class){
-                    return $value."________[".$class."]";
-                })->all();
+            $tmp[$class]=$lines;
+        }
+        // 清除父类中被重写的方法
+        $compares = []; //用来比较是否有重写方法，思路是，先将子类的方法放在这里，在遍历父类中是否有此方法，有的话清除
+        foreach ($tmp as $className=>&$methods){
+            foreach ($methods as $key=>$method){
+                // 清除子类中已有的方法，子类排在父类的前面
+                if(!$method){
+                    unset($methods[$key]);
+                    continue;
+                }
+                if(in_array($method,$compares,true)){
+                    unset($methods[$key]);
+                }else{
+                    $compares[]=$method;
+                }
+            }
+        }
+        //
+        $flat = [];
+        foreach ($tmp as $k=>$v){
+            foreach($v as $sub){
+                $flat[$sub]=$k;
+            }
+        }
+        ksort($flat);
 
-            }
-            $array=array_merge($array,$lines);
-        }
-        asort($array);
-        foreach ($array as $key => $value) {                // 删除空值及将静态方法移到最后
-            if (!$value) {
-                unset($array[$key]);
-                continue;
-            }
-            if (Str::contains($value, 'static')) {
-                unset($array[$key]);
-                array_push($array, $value);
+        foreach ($flat as $key => $value) {                // 删除空值及将静态方法移到最后
+            if (Str::contains($key, 'static')) {
+                unset($flat[$key]);
+                $flat[$key]=$value;
+                //array_push($flat, $value);
             }
         }
-        return collect(array_values($array))->reduce(function ($result, $item) {
+        return $this->Array2str($flat);
+        /*return collect(array_values($array))->unique()->reduce(function ($result, $item) {
             return $result . $item . "\n";
 
-        });
+        });*/
+    }
+
+
+    /**
+     * 获取类继承链
+     * 用法 $a = myClass::getChain()()
+     * 用法 $b = myClass::getChain()('theClass')
+     * @return \Closure
+     */
+    public static function getChain() {
+        $chain = [];
+        return $function = function($className='') use (& $chain, & $function) {
+            if (empty($className))
+                $className = static::class;
+
+            if (empty($chain))
+                $chain[] = $className;
+
+            $parent = get_parent_class($className); //没有父类时返回false
+
+            if ($parent !== false) {
+                $chain[]= $parent;
+                return $function($parent);
+            }
+            return $chain;
+        };
     }
 
 
@@ -372,31 +421,70 @@ EOT;
     public function Array2str($arr, $title = null, $sort = false)
     {
         $arr = Arr::wrap($arr);
-        $isOneDimensional = count($arr) == count($arr, 1);
+        $isOneDimensional = count($arr) == count($arr, 1);   // 判断是否是一维数组
         if ($isOneDimensional) {
             $sort && ksort($arr);
             if (!empty($arr)) {
+                // 读取数组中最长的键的长度
                 $maxKeyLength = collect(array_keys($arr))->max(function ($item) {
                     return strlen($item);
                 });
+                //
                 $str = collect(array_keys($arr))->reduce(function ($result, $key) use ($arr, $maxKeyLength) {
-                    return $result . '  ' . str_pad($key, $maxKeyLength, ' ') . " => " . $arr[$key] . PHP_EOL;
-
+                    // chop否则会在html换行
+                    if($arr[$key] instanceof \Closure){
+                        $arr[$key]=$this->closure_dump($arr[$key]);
+                    }
+                    return $result . str_pad(chop($key), $maxKeyLength, '.') . " => " . $arr[$key] . PHP_EOL;
                 }, '');
             } else {
                 $str = 'It\'s only an empty array';
             }
         }
         ob_start();
-        echo "<pre>";
+        echo "<pre style='background-color: aliceblue;width:100%'>\n";
         echo $title ? "<h2>" . $title . "</h2>" : '';
         if ($isOneDimensional) {
             echo $str;
         } else {
             print_r($arr);
         }
-        echo "</pre>";
+        echo "\n</pre>";
         return ob_get_clean();
+    }
+
+    // 打印闭包的代码
+
+    public function closure_dump($c) {
+        if(! $c instanceof \Closure){
+            return ;
+        }
+        $str = 'function (';
+        $r = new \ReflectionFunction($c);
+        $params = array();
+        foreach($r->getParameters() as $p) {
+            $s = '';
+            if($p->isArray()) {
+                $s .= 'array ';
+            } else if($p->getClass()) {
+                $s .= $p->getClass()->name . ' ';
+            }
+            if($p->isPassedByReference()){
+                $s .= '&';
+            }
+            $s .= '$' . $p->name;
+            if($p->isOptional()) {
+                $s .= ' = ' . var_export($p->getDefaultValue(), TRUE);
+            }
+            $params []= $s;
+        }
+        $str .= implode(', ', $params);
+        $str .= '){' . PHP_EOL;
+        $lines = file($r->getFileName());
+        for($l = $r->getStartLine(); $l < $r->getEndLine(); $l++) {
+            $str .= $lines[$l];
+        }
+        return $str;
     }
 
 
